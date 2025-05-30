@@ -4,11 +4,13 @@ import ApiResponse from '../utils/ApirResponse.js'
 import {User} from '../models/user.model.js'
 import uploadResult from '../utils/Cloudinary.js'
 import { options } from "../constants.js";
-
+import jwt from 'jsonwebtoken'
 const generateAccessTokenRefereshToken = async(userId)=>{
     const user  =  await User.findById(userId)
+    if(!user) throw new ApiError(400,"User not found while generating token")
     const accessToken = user.generateAccessToken()
     const refereshToken = user.generateRefereshToken()
+    // console.log(`accessToken:${accessToken} \n refereshToken:${refereshToken}`)
     user.refereshToken = refereshToken
     await user.save({validateBeforeSave:false})
     return {accessToken,refereshToken}
@@ -76,7 +78,9 @@ const userLogin = asyncHandler(async(req,res)=>{
     //return response
 
 
-    const {email,username, password} = req.body
+    console.log(req.body)
+    const { email,username, password} = req.body
+   
     
     if(!email || !username){
         throw new ApiError(400,"username or email is required")
@@ -86,8 +90,9 @@ const userLogin = asyncHandler(async(req,res)=>{
     const checkPassword  =  await findUser.isPasswordCorrect(password)
 if(!checkPassword) throw new ApiError(400,"Invalid Creditentials")
 
-    const {accessToken,refereshToken} = generateAccessTokenRefereshToken(findUser._id)
-const LoggedInUser = await User.findById(findUser._id).select("-password","-refereshToken")
+    const {accessToken,refereshToken} = await generateAccessTokenRefereshToken(findUser._id)
+   
+const LoggedInUser = await User.findById(findUser._id).select("-password -refereshToken")
 if(!LoggedInUser) throw new ApiError(400,"Fail in LoggedIn")
 
 
@@ -100,10 +105,31 @@ return res.status(200)
 )
 })
 const userLogout  = asyncHandler(async(req,res)=>{
-await User.findByIdAndUpdate(req.user._id,{$set:{refereshToken:undefined}},{new:true})
+ await User.findByIdAndUpdate(req.user._id,{$set:{refereshToken:undefined}},{new:true})
 return res.
 status(200).
 clearCookie("accessToken",options).
 clearCookie("refereshToken",options).json(new ApiResponse(200,{},"User is logged Out"))
 })
-export {userRegister,userLogin,userLogout}
+const AccessrefereshToken = asyncHandler(async(req,res)=>{
+const refereshToken  = req.cookie?.refereshToken || req.body.refereshToken
+if(!refereshToken) throw new ApiError(401,"Refersh token not found")
+    try {
+        const decoded = jwt.verify(refereshToken,process.env.REFRESH_TOKEN_SECERET)
+    const user  = await User.findById(decoded._id)
+    if(!user) throw new ApiError("Invalid referesh token")
+    if(user?.refereshToken!==refereshToken) throw new ApiError(401,"Referesh token is expired!")
+    const {accessToken,newRefereshToken} = await generateAccessTokenRefereshToken(user._id)
+    
+    return res.status(200)
+    .cookie("accessToken",accessToken,options)
+    .cookie("refereshToken",newRefereshToken,options)
+    .json(new ApiResponse(200,{
+        accessToken,
+        refereshToken:newRefereshToken
+    },"Access token refereshed"))
+    } catch (error) {
+        throw new ApiError(400,"Error in Refereshing Token")
+    }
+})
+export {userRegister,userLogin,userLogout,AccessrefereshToken}
